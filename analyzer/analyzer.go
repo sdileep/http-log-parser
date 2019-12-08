@@ -11,6 +11,35 @@ import (
 	"time"
 )
 
+const (
+	//ErrConfigIsRequired :
+	ErrConfigIsRequired = "config is required"
+	// ErrLineRegexIsRequired :
+	ErrLineRegexIsRequired = "line regex is required"
+	// ErrOpeningFile :
+	ErrOpeningFile = "error opening file"
+)
+
+// LogAnalytics :
+type LogAnalytics struct {
+	// UniqueIPCount : The number of unique IP addresses
+	UniqueIPCount int
+	// Most active IP addresses
+	MostActiveIPs []string
+	// Most visited URLs
+	MostVisitedURLs []string
+}
+
+// LogAnalyzer :
+type LogAnalyzer interface {
+	Analyze(filePath string) (*LogAnalytics, error)
+}
+type logAnalyzer struct {
+	lineRegex            *regexp.Regexp
+	mostActiveIPsCount   int
+	mostVisitedURLsCount int
+}
+
 // Line : Represents a line in the log
 type Line struct {
 	RemoteHost string
@@ -23,10 +52,52 @@ type Line struct {
 	URL        string
 }
 
-const (
-	// ErrOpeningFile :
-	ErrOpeningFile = "error opening file"
-)
+const ()
+
+func (l *logAnalyzer) Analyze(filePath string) (*LogAnalytics, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, errors.New(ErrOpeningFile)
+	}
+	defer file.Close()
+
+	lineCh, errCh := readLogLines(file, l.lineRegex)
+	go func() {
+		err := <-errCh
+		if err != nil {
+			// TODO: stream somewhere else. Skipping bad lines intentionally
+			fmt.Println(fmt.Sprintf("error: %+v", err))
+		}
+	}()
+
+	uniqueIps := make(map[string]int)
+	urlHits := make(map[string]int)
+	for line := range lineCh {
+		// consolidate IP metrics
+		count, exists := uniqueIps[line.RemoteHost]
+		if !exists {
+			uniqueIps[line.RemoteHost] = 0
+		}
+		uniqueIps[line.RemoteHost] = count + 1
+
+		// consolidate URL metrics
+		count, exists = urlHits[line.URL]
+		if !exists {
+			urlHits[line.URL] = 0
+		}
+		urlHits[line.URL] = count + 1
+	}
+
+	mostActiveIPs := topMost(uniqueIps, l.mostActiveIPsCount)
+	mostVisitedURLs := topMost(urlHits, l.mostVisitedURLsCount)
+
+	return &LogAnalytics{
+		UniqueIPCount:   len(uniqueIps),
+		MostActiveIPs:   mostActiveIPs,
+		MostVisitedURLs: mostVisitedURLs,
+	}, nil
+
+}
 
 func readLogLines(file *os.File, lineRegex *regexp.Regexp) (<-chan *Line, <-chan error) {
 	outCh := make(chan *Line)
@@ -87,106 +158,33 @@ func readLogLines(file *os.File, lineRegex *regexp.Regexp) (<-chan *Line, <-chan
 	return outCh, errCh
 }
 
-// LogAnalytics :
-type LogAnalytics struct {
-	// UniqueIPCount : The number of unique IP addresses
-	UniqueIPCount int
-	// Most active IP addresses
-	MostActiveIPs []string
-	// Most visited URLs
-	MostVisitedURLs []string
-}
-
-// LogAnalyzer :
-type LogAnalyzer interface {
-	Analyze(filePath string) (*LogAnalytics, error)
-}
-type logAnalyzer struct {
-	lineRegex            *regexp.Regexp
-	mostActiveIPsCount   int
-	mostVisitedURLsCount int
-}
-
-func (l *logAnalyzer) Analyze(filePath string) (*LogAnalytics, error) {
-	file, err := os.Open(filePath)
-	if err != nil {
-		return nil, errors.New(ErrOpeningFile)
-	}
-	defer file.Close()
-
-	lineCh, errCh := readLogLines(file, l.lineRegex)
-	go func() {
-		err := <-errCh
-		if err != nil {
-			// TODO: stream somewhere else
-			fmt.Println(fmt.Sprintf("error: %+v", err))
-		}
-	}()
-
-	lineCount := 0
-	uniqueIps := make(map[string]int)
-	urlHits := make(map[string]int)
-	for line := range lineCh {
-		count, exists := uniqueIps[line.RemoteHost]
-		if !exists {
-			uniqueIps[line.RemoteHost] = 0
-		}
-		uniqueIps[line.RemoteHost] = count + 1
-
-		count, exists = urlHits[line.URL]
-		if !exists {
-			urlHits[line.URL] = 0
-		}
-		urlHits[line.URL] = count + 1
-
-		lineCount++
-	}
-
-	type ipStat struct {
-		address string
-		count   int
-	}
-	type urlStat struct {
+func topMost(metrics map[string]int, top int) []string {
+	type stat struct {
 		address string
 		count   int
 	}
 
-	ipStats := make([]*ipStat, 0, len(uniqueIps))
-	for k, v := range uniqueIps {
-		ipStats = append(ipStats, &ipStat{
+	// To retrieve The top m count:
+	//  	collect IP specific metrics,
+	//		sort the collected metrics by the count
+	//		retrieve top m
+	stats := make([]*stat, 0, len(metrics))
+	for k, v := range metrics {
+		stats = append(stats, &stat{
 			address: k,
 			count:   v,
 		})
 	}
-	sort.Slice(ipStats, func(i, j int) bool {
-		return ipStats[i].count > ipStats[j].count
+
+	sort.Slice(stats, func(i, j int) bool {
+		return stats[i].count > stats[j].count
 	})
-	var mostActiveIPs []string
-	for i := 0; i < l.mostActiveIPsCount; i++ {
-		mostActiveIPs = append(mostActiveIPs, ipStats[i].address)
+	var topMost []string
+	for i := 0; i < top; i++ {
+		topMost = append(topMost, stats[i].address)
 	}
 
-	urlStats := make([]*urlStat, 0, len(urlHits))
-	for k, v := range urlHits {
-		urlStats = append(urlStats, &urlStat{
-			address: k,
-			count:   v,
-		})
-	}
-	sort.Slice(urlStats, func(i, j int) bool {
-		return urlStats[i].count > urlStats[j].count
-	})
-	var mostVisitedURLs []string
-	for i := 0; i < l.mostVisitedURLsCount; i++ {
-		mostVisitedURLs = append(mostVisitedURLs, urlStats[i].address)
-	}
-
-	return &LogAnalytics{
-		UniqueIPCount:   len(uniqueIps),
-		MostActiveIPs:   mostActiveIPs,
-		MostVisitedURLs: mostVisitedURLs,
-	}, nil
-
+	return topMost
 }
 
 // LogAnalyzerConfig :
@@ -195,13 +193,6 @@ type LogAnalyzerConfig struct {
 	MostActiveIPsCount   int
 	MostVisitedURLsCount int
 }
-
-const (
-	//ErrConfigIsRequired :
-	ErrConfigIsRequired = "config is required"
-	// ErrLineRegexIsRequired :
-	ErrLineRegexIsRequired = "line regex is required"
-)
 
 // NewLogAnalyzer : Returns a log analyzer that implements LogAnalyzer interface
 func NewLogAnalyzer(config *LogAnalyzerConfig) (LogAnalyzer, error) {

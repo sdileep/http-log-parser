@@ -28,6 +28,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("regexp: %s", err)
 	}
+
 	logAnalyzer, err := analyzer.NewLogAnalyzer(&analyzer.LogAnalyzerConfig{
 		LineRegex:            lineRegex,
 		MostActiveIPsCount:   4,
@@ -38,6 +39,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
 	fmt.Printf("unique ips count: %d\n", analytics.UniqueIPCount)
 	fmt.Printf("most visited urls: %v\n", analytics.MostVisitedURLs)
 	fmt.Printf("most active ips: %v\n", analytics.MostActiveIPs)
