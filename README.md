@@ -15,11 +15,13 @@ For a given log file we want to know,
 # How to run task
 
 ```bash
+go mod tidy
 go run main.go
 ```
 
 # How to run task tests
 
 ```bash
- go test */*.go -v
+go mod tidy
+go test */*.go -v
 ```
